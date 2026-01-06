@@ -15,6 +15,7 @@ import json
 import subprocess
 import tarfile
 import logging
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -40,7 +41,9 @@ class VirtualBoxBackup:
             "vms_to_exclude": [],
             "compression": True,
             "include_manifest": True,  # Generate manifest file with SHA-1 checksums for integrity verification
-            "handle_running_vms": "pause",  # Options: "pause", "suspend", "skip", "fail"
+            "handle_running_vms": "suspend",  # Options: "pause", "suspend", "skip", "fail"
+            # Note: "suspend" (savestate) is recommended as it releases disk locks
+            # "pause" may not release disk locks in all cases
             "log_file": "backup.log",
             "vboxmanage_path": "VBoxManage"
         }
@@ -141,12 +144,14 @@ class VirtualBoxBackup:
         success, output = self._run_command([vboxmanage, "showvminfo", vm_uuid, "--machinereadable"])
         
         if not success:
+            logging.warning(f"Could not get VM state, output: {output}")
             return "unknown"
         
         # Parse machine-readable output for VMState
         for line in output.split('\n'):
             if line.startswith('VMState='):
                 state = line.split('=')[1].strip('"')
+                logging.debug(f"VM state detected: {state}")
                 return state
         
         # Fallback to parsing human-readable output
@@ -160,15 +165,26 @@ class VirtualBoxBackup:
             return "poweredoff"
     
     def _pause_vm(self, vm_uuid: str, vm_name: str) -> bool:
-        """Pause a running VM."""
+        """Pause a running VM and verify it's paused."""
         vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
         logging.info(f"Pausing VM {vm_name}...")
         success, output = self._run_command([vboxmanage, "controlvm", vm_uuid, "pause"])
-        if success:
-            logging.info(f"VM {vm_name} paused successfully")
-        else:
+        if not success:
             logging.error(f"Failed to pause VM {vm_name}: {output}")
-        return success
+            return False
+        
+        # Wait a moment for the pause to take effect
+        time.sleep(2)
+        
+        # Verify the VM is actually paused
+        state = self._get_vm_state(vm_uuid)
+        if state == "paused":
+            logging.info(f"VM {vm_name} paused successfully (verified)")
+            return True
+        else:
+            logging.warning(f"VM {vm_name} pause command succeeded but state is '{state}' (expected 'paused')")
+            # Still return True as pause command succeeded, disk locks should be released
+            return True
     
     def _resume_vm(self, vm_uuid: str, vm_name: str) -> bool:
         """Resume a paused VM."""
@@ -206,22 +222,35 @@ class VirtualBoxBackup:
         
         # Get VM state
         vm_state = self._get_vm_state(vm_uuid)
+        logging.info(f"VM {vm_name} current state: {vm_state}")
         was_paused = False
         handle_running = self.config.get("handle_running_vms", "pause")
         
         # Handle running VMs based on configuration
         if vm_state == "running":
+            logging.info(f"VM {vm_name} is running, handling according to 'handle_running_vms' setting: {handle_running}")
             if handle_running == "pause":
                 if not self._pause_vm(vm_uuid, vm_name):
                     logging.error(f"Cannot backup {vm_name}: failed to pause VM")
                     return False
                 was_paused = True
+                # Additional wait to ensure disk locks are fully released
+                # Note: Pause may not always release disk locks - consider using "suspend" instead
+                logging.info("Waiting for disk locks to be released...")
+                time.sleep(5)
             elif handle_running == "suspend":
                 if not self._suspend_vm(vm_uuid, vm_name):
                     logging.error(f"Cannot backup {vm_name}: failed to suspend VM")
                     return False
-                # Note: Suspended VMs need to be started after backup, but we'll leave them suspended
-                # as that's typically what users want when suspending
+                # Wait for suspend (savestate) to complete and release disk locks
+                logging.info("Waiting for VM state to be saved and disk locks released...")
+                time.sleep(5)
+                # Verify VM is suspended
+                new_state = self._get_vm_state(vm_uuid)
+                if new_state != "saved":
+                    logging.warning(f"VM state after suspend is '{new_state}' (expected 'saved'), but proceeding...")
+                # Note: Suspended VMs remain suspended after backup
+                # User can start them manually if needed
             elif handle_running == "skip":
                 logging.warning(f"Skipping {vm_name}: VM is running and handle_running_vms is set to 'skip'")
                 return False
@@ -230,6 +259,8 @@ class VirtualBoxBackup:
                 return False
             else:
                 logging.warning(f"VM {vm_name} is running. Attempting backup anyway (may fail if disk is locked)...")
+        elif vm_state not in ["poweredoff", "saved", "paused", "aborted"]:
+            logging.warning(f"VM {vm_name} is in state '{vm_state}' which may have disk locks. Proceeding with backup...")
         
         # Export the VM
         export_command = [

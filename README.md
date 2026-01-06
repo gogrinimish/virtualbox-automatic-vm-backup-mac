@@ -70,9 +70,9 @@ Edit `config.json` to customize the backup behavior:
 - **`include_manifest`**: Generate manifest file (.mf) with SHA-1 checksums for integrity verification (default: `true`)
   - Recommended for backups to detect corruption during restore
   - Manifest file is included in compressed backups
-- **`handle_running_vms`**: How to handle VMs that are running during backup (default: `"pause"`)
-  - `"pause"`: Pause the VM, backup, then resume (recommended - preserves VM state)
-  - `"suspend"`: Save VM state and suspend, then backup (VM remains suspended after backup)
+- **`handle_running_vms`**: How to handle VMs that are running during backup (default: `"suspend"`)
+  - `"suspend"`: Save VM state and suspend, then backup (recommended - releases disk locks, VM remains suspended after backup)
+  - `"pause"`: Pause the VM, backup, then resume (may not release disk locks in all cases)
   - `"skip"`: Skip running VMs and log a warning
   - `"fail"`: Fail the backup if VM is running
 - **`auto_cleanup`**: Automatically clean up old backups after backup (default: `true`)
