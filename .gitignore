@@ -1,0 +1,40 @@
+# Configuration files (user-specific)
+config.json
+
+# Backup directories
+backups/
+*.ova
+*.tar.gz
+
+# Log files
+*.log
+launchd.log
+launchd.error.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temporary files
+*.tmp
+*.bak
+

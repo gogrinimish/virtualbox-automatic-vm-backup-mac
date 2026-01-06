@@ -1,0 +1,13 @@
+{
+    "backup_directory": "./backups",
+    "retention_days": 30,
+    "vms_to_backup": [],
+    "vms_to_exclude": [],
+    "compression": true,
+    "include_manifest": true,
+    "auto_cleanup": true,
+    "log_file": "backup.log",
+    "log_level": "INFO",
+    "vboxmanage_path": "VBoxManage"
+}
+

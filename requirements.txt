@@ -1,0 +1,6 @@
+# VirtualBox Automatic VM Backup - Requirements
+# Python 3.7+ required
+
+# No external dependencies required - uses only Python standard library
+# This file is kept for future extensibility and project structure
+
