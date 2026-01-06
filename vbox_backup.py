@@ -299,11 +299,7 @@ class VirtualBoxBackup:
         
         logging.info(f"Successfully backed up {vm_name} to {backup_path}")
         
-        # Compress if enabled
-        if self.config.get("compression", True):
-            self._compress_backup(backup_path)
-        
-        # Resume VM if it was running before backup
+        # Resume VM if it was running before backup (do this before compression)
         if was_running and self.config.get("resume_after_backup", True):
             logging.info(f"Resuming VM {vm_name} (was running before backup)...")
             if not self._resume_vm(vm_uuid, vm_name):
@@ -311,6 +307,10 @@ class VirtualBoxBackup:
                 # Don't fail the backup if resume fails - backup was successful
             else:
                 logging.info(f"VM {vm_name} resumed successfully after backup")
+        
+        # Compress if enabled (after VM is resumed)
+        if self.config.get("compression", True):
+            self._compress_backup(backup_path)
         
         return True
     
