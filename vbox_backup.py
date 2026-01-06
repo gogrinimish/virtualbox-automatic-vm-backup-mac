@@ -106,9 +106,7 @@ class VirtualBoxBackup:
                     command,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    universal_newlines=True
+                    text=True
                 )
                 
                 output_lines = []
@@ -215,15 +213,37 @@ class VirtualBoxBackup:
         return success
     
     def _resume_vm(self, vm_uuid: str, vm_name: str) -> bool:
-        """Resume a VM from saved state."""
+        """Resume/start a VM from saved or paused state."""
         vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
-        logging.info(f"Resuming VM {vm_name}...")
-        success, output = self._run_command([vboxmanage, "controlvm", vm_uuid, "resume"])
-        if success:
-            logging.info(f"VM {vm_name} resumed successfully")
+        
+        # Check current VM state to determine the correct command
+        vm_state = self._get_vm_state(vm_uuid)
+        
+        if vm_state == "saved":
+            # VM was saved (suspended), need to start it to restore from saved state
+            logging.info(f"Starting VM {vm_name} from saved state...")
+            success, output = self._run_command([vboxmanage, "startvm", vm_uuid, "--type", "headless"])
+            if success:
+                logging.info(f"VM {vm_name} started successfully from saved state")
+            else:
+                logging.error(f"Failed to start VM {vm_name} from saved state: {output}")
+            return success
+        elif vm_state == "paused":
+            # VM is paused, use resume command
+            logging.info(f"Resuming paused VM {vm_name}...")
+            success, output = self._run_command([vboxmanage, "controlvm", vm_uuid, "resume"])
+            if success:
+                logging.info(f"VM {vm_name} resumed successfully")
+            else:
+                logging.error(f"Failed to resume VM {vm_name}: {output}")
+            return success
+        elif vm_state == "running":
+            # VM is already running, nothing to do
+            logging.info(f"VM {vm_name} is already running")
+            return True
         else:
-            logging.error(f"Failed to resume VM {vm_name}: {output}")
-        return success
+            logging.warning(f"VM {vm_name} is in state '{vm_state}', cannot resume/start")
+            return False
     
     def backup_vm(self, vm: Dict[str, str]) -> bool:
         """Backup a single VM."""
@@ -281,9 +301,15 @@ class VirtualBoxBackup:
         
         # Add manifest option if enabled (default: True)
         # Manifest file contains SHA-1 checksums for integrity verification
-        if self.config.get("include_manifest", True):
+        manifest_enabled = self.config.get("include_manifest", True)
+        if manifest_enabled:
             export_command.append("--manifest")
             logging.info(f"Exporting VM {vm_name} to {backup_path} with manifest (integrity checksums)")
+            manifest_path = backup_path.with_suffix('.mf')
+            if self.config.get("compression", True):
+                logging.info(f"Manifest file will be created as {manifest_path.name} and included in compressed archive")
+            else:
+                logging.info(f"Manifest file will be created as {manifest_path.name} alongside the OVA file")
         else:
             logging.info(f"Exporting VM {vm_name} to {backup_path}")
         
@@ -332,14 +358,16 @@ class VirtualBoxBackup:
                 manifest_path = backup_path.with_suffix('.mf')
                 if manifest_path.exists():
                     tar.add(manifest_path, arcname=manifest_path.name)
-                    logging.info(f"Including manifest file: {manifest_path.name}")
+                    logging.info(f"Including manifest file {manifest_path.name} in compressed archive")
+                else:
+                    logging.info("No manifest file found (manifest may be disabled in config)")
             
             # Remove original files after successful compression
             backup_path.unlink()
             manifest_path = backup_path.with_suffix('.mf')
             if manifest_path.exists():
                 manifest_path.unlink()
-            logging.info(f"Compression complete. Removed original file(s).")
+            logging.info(f"Compression complete. Original files removed. Manifest is included in {compressed_path.name}")
         except Exception as e:
             logging.error(f"Failed to compress backup: {e}")
             # Keep original file if compression fails
