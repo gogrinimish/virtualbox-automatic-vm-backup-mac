@@ -165,7 +165,14 @@ crontab -e
 
 Create a plist file for launchd (more reliable than cron on macOS):
 
-1. Create `~/Library/LaunchAgents/com.vboxbackup.plist`:
+1. Copy the example plist file and edit it:
+```bash
+cp com.vboxbackup.plist.example ~/Library/LaunchAgents/com.vboxbackup.plist
+```
+
+Then edit `~/Library/LaunchAgents/com.vboxbackup.plist` and update the paths:
+
+Example plist file:
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -195,12 +202,27 @@ Create a plist file for launchd (more reliable than cron on macOS):
 
 2. Load the service:
 ```bash
-launchctl load ~/Library/LaunchAgents/com.vboxbackup.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.vboxbackup.plist
 ```
 
 3. To unload:
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.vboxbackup.plist
+launchctl bootout gui/$(id -u)/com.vboxbackup
+```
+
+**Note:** On older macOS versions (before 10.11), you may need to use the deprecated commands:
+- Load: `launchctl load ~/Library/LaunchAgents/com.vboxbackup.plist`
+- Unload: `launchctl unload ~/Library/LaunchAgents/com.vboxbackup.plist`
+
+4. Check service status:
+```bash
+launchctl list | grep com.vboxbackup
+```
+
+5. View logs:
+```bash
+tail -f /path/to/virtualbox-automatic-vm-backup-mac/launchd.log
+tail -f /path/to/virtualbox-automatic-vm-backup-mac/launchd.error.log
 ```
 
 ## Backup Format
