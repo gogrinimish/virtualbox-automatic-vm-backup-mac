@@ -29,8 +29,11 @@ class VirtualBoxBackup:
         """Initialize the backup manager with configuration."""
         self.config = self._load_config(config_path)
         self._setup_logging()
-        self.backup_dir = Path(self.config.get("backup_directory", "./backups"))
+        # Convert backup directory to absolute path
+        backup_dir = self.config.get("backup_directory", "./backups")
+        self.backup_dir = Path(backup_dir).resolve()
         self.backup_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(f"Backup directory: {self.backup_dir}")
         
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from JSON file."""
@@ -41,9 +44,9 @@ class VirtualBoxBackup:
             "vms_to_exclude": [],
             "compression": True,
             "include_manifest": True,  # Generate manifest file with SHA-1 checksums for integrity verification
-            "handle_running_vms": "suspend",  # Options: "pause", "suspend", "skip", "fail"
-            # Note: "suspend" (savestate) is recommended as it releases disk locks
-            # "pause" may not release disk locks in all cases
+            "handle_running_vms": "suspend",  # Options: "suspend", "skip", "fail"
+            # Note: "suspend" (savestate) releases disk locks reliably
+            "resume_after_backup": True,  # Automatically resume VMs that were running before backup
             "log_file": "backup.log",
             "vboxmanage_path": "VBoxManage"
         }
@@ -75,27 +78,63 @@ class VirtualBoxBackup:
         log_file = self.config.get("log_file", "backup.log")
         log_level = self.config.get("log_level", "INFO").upper()
         
+        # Convert log file to absolute path
+        log_file_path = Path(log_file).resolve()
+        
         logging.basicConfig(
             level=getattr(logging, log_level, logging.INFO),
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_file),
+                logging.FileHandler(log_file_path),
                 logging.StreamHandler(sys.stdout)
-            ]
+            ],
+            force=True  # Force reconfiguration if logging was already set up
         )
+        logging.info(f"Logging to: {log_file_path}")
     
-    def _run_command(self, command: List[str]) -> Tuple[bool, str]:
-        """Run a shell command and return success status and output."""
+    def _run_command(self, command: List[str], show_progress: bool = False) -> Tuple[bool, str]:
+        """Run a shell command and return success status and output.
+        
+        Args:
+            command: Command to run
+            show_progress: If True, show real-time output for long-running commands
+        """
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            return result.returncode == 0, result.stdout + result.stderr
+            if show_progress:
+                # For long-running commands, show progress in real-time
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
+                
+                output_lines = []
+                for line in process.stdout:
+                    line = line.rstrip()
+                    if line:
+                        print(line, flush=True)  # Show progress in real-time
+                        logging.info(line)  # Also log it
+                        output_lines.append(line)
+                
+                process.wait()
+                output = '\n'.join(output_lines)
+                return process.returncode == 0, output
+            else:
+                # For quick commands, capture output normally
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                return result.returncode == 0, result.stdout + result.stderr
         except Exception as e:
-            return False, str(e)
+            error_msg = str(e)
+            logging.error(f"Command execution error: {error_msg}")
+            return False, error_msg
     
     def list_vms(self) -> List[Dict[str, str]]:
         """List all available VirtualBox VMs."""
@@ -164,39 +203,6 @@ class VirtualBoxBackup:
         else:
             return "poweredoff"
     
-    def _pause_vm(self, vm_uuid: str, vm_name: str) -> bool:
-        """Pause a running VM and verify it's paused."""
-        vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
-        logging.info(f"Pausing VM {vm_name}...")
-        success, output = self._run_command([vboxmanage, "controlvm", vm_uuid, "pause"])
-        if not success:
-            logging.error(f"Failed to pause VM {vm_name}: {output}")
-            return False
-        
-        # Wait a moment for the pause to take effect
-        time.sleep(2)
-        
-        # Verify the VM is actually paused
-        state = self._get_vm_state(vm_uuid)
-        if state == "paused":
-            logging.info(f"VM {vm_name} paused successfully (verified)")
-            return True
-        else:
-            logging.warning(f"VM {vm_name} pause command succeeded but state is '{state}' (expected 'paused')")
-            # Still return True as pause command succeeded, disk locks should be released
-            return True
-    
-    def _resume_vm(self, vm_uuid: str, vm_name: str) -> bool:
-        """Resume a paused VM."""
-        vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
-        logging.info(f"Resuming VM {vm_name}...")
-        success, output = self._run_command([vboxmanage, "controlvm", vm_uuid, "resume"])
-        if success:
-            logging.info(f"VM {vm_name} resumed successfully")
-        else:
-            logging.error(f"Failed to resume VM {vm_name}: {output}")
-        return success
-    
     def _suspend_vm(self, vm_uuid: str, vm_name: str) -> bool:
         """Suspend (save state) a running VM."""
         vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
@@ -206,6 +212,17 @@ class VirtualBoxBackup:
             logging.info(f"VM {vm_name} suspended successfully")
         else:
             logging.error(f"Failed to suspend VM {vm_name}: {output}")
+        return success
+    
+    def _resume_vm(self, vm_uuid: str, vm_name: str) -> bool:
+        """Resume a VM from saved state."""
+        vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
+        logging.info(f"Resuming VM {vm_name}...")
+        success, output = self._run_command([vboxmanage, "controlvm", vm_uuid, "resume"])
+        if success:
+            logging.info(f"VM {vm_name} resumed successfully")
+        else:
+            logging.error(f"Failed to resume VM {vm_name}: {output}")
         return success
     
     def backup_vm(self, vm: Dict[str, str]) -> bool:
@@ -223,22 +240,16 @@ class VirtualBoxBackup:
         # Get VM state
         vm_state = self._get_vm_state(vm_uuid)
         logging.info(f"VM {vm_name} current state: {vm_state}")
-        was_paused = False
-        handle_running = self.config.get("handle_running_vms", "pause")
+        handle_running = self.config.get("handle_running_vms", "suspend")
+        
+        # Track if VM was originally running (to resume after backup)
+        was_running = False
         
         # Handle running VMs based on configuration
         if vm_state == "running":
             logging.info(f"VM {vm_name} is running, handling according to 'handle_running_vms' setting: {handle_running}")
-            if handle_running == "pause":
-                if not self._pause_vm(vm_uuid, vm_name):
-                    logging.error(f"Cannot backup {vm_name}: failed to pause VM")
-                    return False
-                was_paused = True
-                # Additional wait to ensure disk locks are fully released
-                # Note: Pause may not always release disk locks - consider using "suspend" instead
-                logging.info("Waiting for disk locks to be released...")
-                time.sleep(5)
-            elif handle_running == "suspend":
+            if handle_running == "suspend":
+                was_running = True  # Mark that we need to resume after backup
                 if not self._suspend_vm(vm_uuid, vm_name):
                     logging.error(f"Cannot backup {vm_name}: failed to suspend VM")
                     return False
@@ -249,8 +260,6 @@ class VirtualBoxBackup:
                 new_state = self._get_vm_state(vm_uuid)
                 if new_state != "saved":
                     logging.warning(f"VM state after suspend is '{new_state}' (expected 'saved'), but proceeding...")
-                # Note: Suspended VMs remain suspended after backup
-                # User can start them manually if needed
             elif handle_running == "skip":
                 logging.warning(f"Skipping {vm_name}: VM is running and handle_running_vms is set to 'skip'")
                 return False
@@ -262,12 +271,12 @@ class VirtualBoxBackup:
         elif vm_state not in ["poweredoff", "saved", "paused", "aborted"]:
             logging.warning(f"VM {vm_name} is in state '{vm_state}' which may have disk locks. Proceeding with backup...")
         
-        # Export the VM
+        # Export the VM - use absolute path to ensure backup goes to the right location
         export_command = [
             vboxmanage,
             "export",
             vm_uuid,
-            "--output", str(backup_path)
+            "--output", str(backup_path.resolve())
         ]
         
         # Add manifest option if enabled (default: True)
@@ -278,11 +287,11 @@ class VirtualBoxBackup:
         else:
             logging.info(f"Exporting VM {vm_name} to {backup_path}")
         
-        success, output = self._run_command(export_command)
-        
-        # Resume VM if it was paused
-        if was_paused:
-            self._resume_vm(vm_uuid, vm_name)
+        logging.info("Starting export (this may take a while for large VMs)...")
+        logging.info(f"Backup will be saved to: {backup_path.resolve()}")
+        # Flush logs to ensure they're written
+        logging.getLogger().handlers[0].flush() if logging.getLogger().handlers else None
+        success, output = self._run_command(export_command, show_progress=True)
         
         if not success:
             logging.error(f"Failed to export VM {vm_name}: {output}")
@@ -293,6 +302,15 @@ class VirtualBoxBackup:
         # Compress if enabled
         if self.config.get("compression", True):
             self._compress_backup(backup_path)
+        
+        # Resume VM if it was running before backup
+        if was_running and self.config.get("resume_after_backup", True):
+            logging.info(f"Resuming VM {vm_name} (was running before backup)...")
+            if not self._resume_vm(vm_uuid, vm_name):
+                logging.warning(f"Backup completed successfully, but failed to resume VM {vm_name}")
+                # Don't fail the backup if resume fails - backup was successful
+            else:
+                logging.info(f"VM {vm_name} resumed successfully after backup")
         
         return True
     

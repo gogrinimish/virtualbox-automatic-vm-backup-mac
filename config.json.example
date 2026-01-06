@@ -6,6 +6,7 @@
     "compression": true,
     "include_manifest": true,
     "handle_running_vms": "suspend",
+    "resume_after_backup": true,
     "auto_cleanup": true,
     "log_file": "backup.log",
     "log_level": "INFO",
