@@ -50,6 +50,7 @@ Edit `config.json` to customize the backup behavior:
     "vms_to_exclude": [],
     "compression": true,
     "include_manifest": true,
+    "handle_running_vms": "pause",
     "auto_cleanup": true,
     "log_file": "backup.log",
     "log_level": "INFO",
@@ -69,6 +70,11 @@ Edit `config.json` to customize the backup behavior:
 - **`include_manifest`**: Generate manifest file (.mf) with SHA-1 checksums for integrity verification (default: `true`)
   - Recommended for backups to detect corruption during restore
   - Manifest file is included in compressed backups
+- **`handle_running_vms`**: How to handle VMs that are running during backup (default: `"pause"`)
+  - `"pause"`: Pause the VM, backup, then resume (recommended - preserves VM state)
+  - `"suspend"`: Save VM state and suspend, then backup (VM remains suspended after backup)
+  - `"skip"`: Skip running VMs and log a warning
+  - `"fail"`: Fail the backup if VM is running
 - **`auto_cleanup`**: Automatically clean up old backups after backup (default: `true`)
 - **`log_file`**: Path to log file (default: `backup.log`)
 - **`log_level`**: Logging level - `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`)
@@ -252,9 +258,16 @@ If you encounter permission errors:
 - Check that you have permissions to access VirtualBox VMs
 - On macOS, you may need to grant Terminal/iTerm full disk access in System Preferences > Security & Privacy > Privacy > Full Disk Access
 
-### VM is Running
+### VM is Running / Disk Locked Error
 
-The script will attempt to backup running VMs. For best results, consider shutting down or suspending VMs before backup, though it's not required.
+If you encounter an error like `VBOX_E_INVALID_OBJECT_STATE` or "Medium is locked for writing", the VM is likely running. The script handles this automatically based on the `handle_running_vms` configuration:
+
+- **Default behavior (`"pause"`)**: The script will automatically pause the VM, perform the backup, then resume it. This is the recommended setting as it preserves the VM's running state.
+- **`"suspend"`**: Saves the VM state and suspends it before backup. The VM will remain suspended after backup.
+- **`"skip"`**: Skips running VMs and logs a warning.
+- **`"fail"`**: Fails the backup if a VM is running.
+
+To change this behavior, edit `config.json` and set `handle_running_vms` to your preferred option.
 
 ### Disk Space
 

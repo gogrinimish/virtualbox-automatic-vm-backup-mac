@@ -5,6 +5,7 @@
     "vms_to_exclude": [],
     "compression": true,
     "include_manifest": true,
+    "handle_running_vms": "pause",
     "auto_cleanup": true,
     "log_file": "backup.log",
     "log_level": "INFO",
