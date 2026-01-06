@@ -22,7 +22,7 @@ A Python script to automatically backup VirtualBox VMs on macOS with configurabl
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/virtualbox-automatic-vm-backup-mac.git
+git clone https://github.com/gogrinimish/virtualbox-automatic-vm-backup-mac.git
 cd virtualbox-automatic-vm-backup-mac
 ```
 
