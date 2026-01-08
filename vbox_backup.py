@@ -27,59 +27,67 @@ class VirtualBoxBackup:
     
     def __init__(self, config_path: str = "config.json"):
         """Initialize the backup manager with configuration."""
+        # Get script directory to resolve relative paths
+        self.script_dir = Path(__file__).parent.resolve()
+        
+        # Resolve config path relative to script directory if it's relative
+        if not os.path.isabs(config_path):
+            config_path = str(self.script_dir / config_path)
+        
         self.config = self._load_config(config_path)
         self._setup_logging()
+        
+        # Validate required config keys
+        required_keys = ["backup_directory", "handle_running_vms"]
+        for key in required_keys:
+            if key not in self.config:
+                error_msg = f"Required config key '{key}' is missing from config file"
+                print(f"ERROR: {error_msg}", file=sys.stderr)
+                sys.exit(1)
+        
         # Convert backup directory to absolute path
-        backup_dir = self.config.get("backup_directory", "./backups")
+        backup_dir = self.config["backup_directory"]
         self.backup_dir = Path(backup_dir).resolve()
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         logging.info(f"Backup directory: {self.backup_dir}")
         
     def _load_config(self, config_path: str) -> Dict:
-        """Load configuration from JSON file."""
-        default_config = {
-            "backup_directory": "./backups",
-            "retention_days": 30,
-            "vms_to_backup": [],  # Empty means all VMs
-            "vms_to_exclude": [],
-            "compression": True,
-            "include_manifest": True,  # Generate manifest file with SHA-1 checksums for integrity verification
-            "handle_running_vms": "suspend",  # Options: "suspend", "skip", "fail"
-            # Note: "suspend" (savestate) releases disk locks reliably
-            "resume_after_backup": True,  # Automatically resume VMs that were running before backup
-            "log_file": "backup.log",
-            "vboxmanage_path": "VBoxManage"
-        }
+        """Load configuration from JSON file. Config file is required."""
+        if not os.path.exists(config_path):
+            error_msg = f"Config file does not exist: {config_path}"
+            print(f"ERROR: {error_msg}", file=sys.stderr)
+            print(f"Please create a config file (e.g., copy config.json.example to {config_path})", file=sys.stderr)
+            sys.exit(1)
         
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, 'r') as f:
-                    user_config = json.load(f)
-                default_config.update(user_config)
-                logging.info(f"Loaded configuration from {config_path}")
-            except json.JSONDecodeError as e:
-                logging.error(f"Error parsing config file: {e}")
-                logging.info("Using default configuration")
-        else:
-            logging.warning(f"Config file {config_path} not found. Using defaults.")
-            logging.info("Creating default config file...")
-            self._create_default_config(config_path, default_config)
-        
-        return default_config
-    
-    def _create_default_config(self, config_path: str, config: Dict):
-        """Create a default configuration file."""
-        with open(config_path, 'w') as f:
-            json.dump(config, f, indent=4)
-        logging.info(f"Created default config file at {config_path}")
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            logging.info(f"Loaded configuration from {config_path}")
+            return config
+        except json.JSONDecodeError as e:
+            error_msg = f"Error parsing config file {config_path}: {e}"
+            print(f"ERROR: {error_msg}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            error_msg = f"Error reading config file {config_path}: {e}"
+            print(f"ERROR: {error_msg}", file=sys.stderr)
+            sys.exit(1)
     
     def _setup_logging(self):
         """Setup logging configuration."""
-        log_file = self.config.get("log_file", "backup.log")
+        if "log_file" not in self.config:
+            error_msg = "Required config key 'log_file' is missing from config file"
+            print(f"ERROR: {error_msg}", file=sys.stderr)
+            sys.exit(1)
+        log_file = self.config["log_file"]
         log_level = self.config.get("log_level", "INFO").upper()
         
-        # Convert log file to absolute path
-        log_file_path = Path(log_file).resolve()
+        # Convert log file to absolute path (relative to script directory if relative)
+        if os.path.isabs(log_file):
+            log_file_path = Path(log_file)
+        else:
+            log_file_path = self.script_dir / log_file
+        log_file_path = log_file_path.resolve()
         
         logging.basicConfig(
             level=getattr(logging, log_level, logging.INFO),
@@ -260,7 +268,7 @@ class VirtualBoxBackup:
         # Get VM state
         vm_state = self._get_vm_state(vm_uuid)
         logging.info(f"VM {vm_name} current state: {vm_state}")
-        handle_running = self.config.get("handle_running_vms", "suspend")
+        handle_running = self.config["handle_running_vms"]
         
         # Track if VM was originally running (to resume after backup)
         was_running = False
