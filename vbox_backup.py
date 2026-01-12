@@ -16,6 +16,7 @@ import subprocess
 import tarfile
 import logging
 import time
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -38,10 +39,50 @@ class VirtualBoxBackup:
         self._setup_logging()
         
         # Validate required config keys
-        required_keys = ["backup_directory", "handle_running_vms"]
+        required_keys = ["backup_directory", "handle_running_vms", "vboxmanage_path"]
         for key in required_keys:
             if key not in self.config:
                 error_msg = f"Required config key '{key}' is missing from config file"
+                print(f"ERROR: {error_msg}", file=sys.stderr)
+                sys.exit(1)
+        
+        # Validate vboxmanage_path exists and is executable
+        vboxmanage_path = self.config["vboxmanage_path"]
+        if not os.path.isabs(vboxmanage_path):
+            # If relative path, check if it's in PATH
+            full_path = shutil.which(vboxmanage_path)
+            if not full_path:
+                # Check common locations for VBoxManage (launchd doesn't have full PATH)
+                common_paths = [
+                    "/usr/local/bin/VBoxManage",
+                    "/Applications/VirtualBox.app/Contents/MacOS/VBoxManage",
+                    "/opt/homebrew/bin/VBoxManage"
+                ]
+                found_path = None
+                for common_path in common_paths:
+                    if os.path.exists(common_path) and os.access(common_path, os.X_OK):
+                        found_path = common_path
+                        break
+                
+                if found_path:
+                    error_msg = f"VBoxManage not found in PATH, but found at: {found_path}"
+                    print(f"WARNING: {error_msg}", file=sys.stderr)
+                    print(f"Please set 'vboxmanage_path' in config.json to: '{found_path}'", file=sys.stderr)
+                    print(f"Note: launchd doesn't inherit your shell PATH, so use absolute paths.", file=sys.stderr)
+                    sys.exit(1)
+                else:
+                    error_msg = f"VBoxManage not found: '{vboxmanage_path}' is not in PATH"
+                    print(f"ERROR: {error_msg}", file=sys.stderr)
+                    print(f"Please set 'vboxmanage_path' in config.json to the full path, e.g., '/usr/local/bin/VBoxManage' or '/Applications/VirtualBox.app/Contents/MacOS/VBoxManage'", file=sys.stderr)
+                    sys.exit(1)
+        else:
+            # If absolute path, check if file exists and is executable
+            if not os.path.exists(vboxmanage_path):
+                error_msg = f"VBoxManage not found: '{vboxmanage_path}' does not exist"
+                print(f"ERROR: {error_msg}", file=sys.stderr)
+                sys.exit(1)
+            if not os.access(vboxmanage_path, os.X_OK):
+                error_msg = f"VBoxManage not executable: '{vboxmanage_path}' is not executable"
                 print(f"ERROR: {error_msg}", file=sys.stderr)
                 sys.exit(1)
         
@@ -144,7 +185,7 @@ class VirtualBoxBackup:
     
     def list_vms(self) -> List[Dict[str, str]]:
         """List all available VirtualBox VMs."""
-        vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
+        vboxmanage = self.config["vboxmanage_path"]
         success, output = self._run_command([vboxmanage, "list", "vms"])
         
         if not success:
@@ -185,7 +226,7 @@ class VirtualBoxBackup:
     
     def _get_vm_state(self, vm_uuid: str) -> str:
         """Get the current state of a VM (running, paused, saved, poweredoff, etc.)."""
-        vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
+        vboxmanage = self.config["vboxmanage_path"]
         success, output = self._run_command([vboxmanage, "showvminfo", vm_uuid, "--machinereadable"])
         
         if not success:
@@ -211,7 +252,7 @@ class VirtualBoxBackup:
     
     def _suspend_vm(self, vm_uuid: str, vm_name: str) -> bool:
         """Suspend (save state) a running VM."""
-        vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
+        vboxmanage = self.config["vboxmanage_path"]
         logging.info(f"Suspending VM {vm_name}...")
         success, output = self._run_command([vboxmanage, "controlvm", vm_uuid, "savestate"])
         if success:
@@ -222,7 +263,7 @@ class VirtualBoxBackup:
     
     def _resume_vm(self, vm_uuid: str, vm_name: str) -> bool:
         """Resume/start a VM from saved or paused state."""
-        vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
+        vboxmanage = self.config["vboxmanage_path"]
         
         # Check current VM state to determine the correct command
         vm_state = self._get_vm_state(vm_uuid)
@@ -263,7 +304,7 @@ class VirtualBoxBackup:
         
         logging.info(f"Starting backup of VM: {vm_name}")
         
-        vboxmanage = self.config.get("vboxmanage_path", "VBoxManage")
+        vboxmanage = self.config["vboxmanage_path"]
         
         # Get VM state
         vm_state = self._get_vm_state(vm_uuid)
@@ -471,10 +512,38 @@ def main():
         action="store_true",
         help="Only run cleanup, skip backup"
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate configuration and check VBoxManage access, then exit"
+    )
     
     args = parser.parse_args()
     
     backup_manager = VirtualBoxBackup(args.config)
+    
+    if args.validate:
+        print("Validating configuration...")
+        print(f"✓ Config file loaded: {args.config}")
+        print(f"✓ Required config keys present")
+        print(f"✓ VBoxManage path validated: {backup_manager.config['vboxmanage_path']}")
+        
+        # Test VBoxManage access
+        print("\nTesting VBoxManage access...")
+        vms = backup_manager.list_vms()
+        if vms:
+            print(f"✓ Successfully connected to VirtualBox")
+            print(f"✓ Found {len(vms)} VM(s)")
+            print("\nAvailable VMs:")
+            for vm in vms:
+                print(f"  - {vm['name']} ({vm['uuid']})")
+        else:
+            print("⚠ No VMs found (this may be normal if you have no VMs)")
+        
+        print(f"\n✓ Backup directory: {backup_manager.backup_dir}")
+        print(f"✓ Log file: {backup_manager.config['log_file']}")
+        print("\n✓ Configuration validation passed!")
+        return
     
     if args.list_vms:
         vms = backup_manager.list_vms()
