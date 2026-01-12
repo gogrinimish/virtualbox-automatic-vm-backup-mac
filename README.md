@@ -32,36 +32,65 @@ cp config.json.example config.json
 ```
 
 3. Edit `config.json` to customize settings (see Configuration section)
+   - **Important:** Set `vboxmanage_path` to an absolute path (e.g., `/usr/local/bin/VBoxManage`)
+   - Use `which VBoxManage` to find the path on your system
 
 4. Make the script executable:
 ```bash
 chmod +x vbox_backup.py
 ```
 
+5. Test your configuration:
+```bash
+python3 vbox_backup.py --validate
+```
+   This validates your config and tests VBoxManage access. See the [Testing](#testing) section for more details.
+
 ## Configuration
 
-Edit `config.json` to customize the backup behavior:
+**Important:** A `config.json` file is required. The script will not run without it. Copy the example file and edit it:
+
+```bash
+cp config.json.example config.json
+```
+
+Then edit `config.json` to customize the backup behavior:
 
 ```json
 {
-    "backup_directory": "./backups",
+    "backup_directory": "/path/to/backups",
     "retention_days": 30,
     "vms_to_backup": [],
     "vms_to_exclude": [],
     "compression": true,
     "include_manifest": true,
-    "handle_running_vms": "pause",
+    "handle_running_vms": "suspend",
+    "resume_after_backup": true,
     "auto_cleanup": true,
     "log_file": "backup.log",
     "log_level": "INFO",
-    "vboxmanage_path": "VBoxManage"
+    "vboxmanage_path": "/usr/local/bin/VBoxManage"
 }
 ```
 
-### Configuration Options
+### Required Configuration Options
 
-- **`backup_directory`**: Directory where backups will be stored (default: `./backups`)
-- **`retention_days`**: Number of days to keep backups before automatic deletion (default: 30)
+These keys **must** be present in your config file:
+
+- **`backup_directory`**: Directory where backups will be stored (use absolute path)
+- **`handle_running_vms`**: How to handle VMs that are running during backup
+  - `"suspend"`: Save VM state and suspend, then backup (recommended - releases disk locks)
+  - `"skip"`: Skip running VMs and log a warning
+  - `"fail"`: Fail the backup if VM is running
+- **`vboxmanage_path`**: **Absolute path** to VBoxManage command
+  - **Important:** Use absolute path (e.g., `/usr/local/bin/VBoxManage` or `/Applications/VirtualBox.app/Contents/MacOS/VBoxManage`)
+  - Launchd doesn't inherit your shell PATH, so relative paths won't work
+  - Run `which VBoxManage` to find the path, or use the `--validate` option
+- **`log_file`**: Path to log file (relative paths are resolved relative to script directory)
+
+### Optional Configuration Options
+
+- **`retention_days`**: Number of days to keep backups before automatic deletion (default: `30`)
 - **`vms_to_backup`**: List of VM names to backup. Empty array `[]` means backup all VMs
   - Example: `["MyVM", "TestVM"]` - only backup these VMs
 - **`vms_to_exclude`**: List of VM names to exclude from backup
@@ -70,14 +99,9 @@ Edit `config.json` to customize the backup behavior:
 - **`include_manifest`**: Generate manifest file (.mf) with SHA-1 checksums for integrity verification (default: `true`)
   - Recommended for backups to detect corruption during restore
   - Manifest file is included in compressed backups
-- **`handle_running_vms`**: How to handle VMs that are running during backup (default: `"suspend"`)
-  - `"suspend"`: Save VM state and suspend, then backup (recommended - releases disk locks, VM remains suspended after backup)
-  - `"skip"`: Skip running VMs and log a warning
-  - `"fail"`: Fail the backup if VM is running
+- **`resume_after_backup`**: Automatically resume VMs that were running before backup (default: `true`)
 - **`auto_cleanup`**: Automatically clean up old backups after backup (default: `true`)
-- **`log_file`**: Path to log file (default: `backup.log`)
 - **`log_level`**: Logging level - `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`)
-- **`vboxmanage_path`**: Path to VBoxManage command (default: `VBoxManage`)
 
 ### Configuration Examples
 
@@ -139,6 +163,51 @@ Use a different configuration file:
 ```bash
 python3 vbox_backup.py --config /path/to/custom-config.json
 ```
+
+## Testing
+
+Before setting up automated backups, it's important to test your configuration to ensure everything works correctly, especially since launchd runs with a minimal PATH environment.
+
+### Validate Configuration
+
+Test your configuration without running a backup:
+```bash
+python3 vbox_backup.py --validate
+```
+
+This will:
+- Verify the config file exists and is valid JSON
+- Check that all required config keys are present
+- Validate that VBoxManage path exists and is executable
+- Test VBoxManage access by listing available VMs
+- Display your backup directory and log file paths
+
+### Test in Launchd-like Environment
+
+Since launchd doesn't inherit your shell's PATH, test with a minimal PATH environment:
+```bash
+./test_launchd_env.sh
+```
+
+This script simulates launchd's environment and runs the validation. If validation passes here, the script should work correctly with launchd.
+
+**Important:** If VBoxManage is in `/usr/local/bin` (common with Homebrew), you must use the absolute path in your config:
+```json
+{
+  "vboxmanage_path": "/usr/local/bin/VBoxManage"
+}
+```
+
+The validation will detect VBoxManage in common locations and suggest the correct absolute path if it's not found in PATH.
+
+### Quick VM List Test
+
+Quick test to verify VBoxManage access:
+```bash
+python3 vbox_backup.py --list-vms
+```
+
+This should list all your VirtualBox VMs if VBoxManage is configured correctly.
 
 ## Automation
 
@@ -256,21 +325,49 @@ VBoxManage import VMName_20240101_120000.ova
 
 ## Troubleshooting
 
+### Config file not found
+
+If you get an error that the config file doesn't exist:
+
+1. Copy the example config file:
+```bash
+cp config.json.example config.json
+```
+
+2. Edit `config.json` and set all required keys (see [Configuration](#configuration) section)
+
+3. Run validation to check your config:
+```bash
+python3 vbox_backup.py --validate
+```
+
 ### VBoxManage not found
 
 If you get an error that `VBoxManage` is not found:
 
-1. Check if VirtualBox is installed:
+1. Find VBoxManage on your system:
 ```bash
 which VBoxManage
 ```
 
-2. If not in PATH, add VirtualBox to your PATH or specify the full path in `config.json`:
+2. **Use absolute path in config.json** (required for launchd):
 ```json
 {
-    "vboxmanage_path": "/Applications/VirtualBox.app/Contents/MacOS/VBoxManage"
+    "vboxmanage_path": "/usr/local/bin/VBoxManage"
 }
 ```
+
+Common locations:
+- `/usr/local/bin/VBoxManage` (Homebrew installation)
+- `/Applications/VirtualBox.app/Contents/MacOS/VBoxManage` (App Store/standard installation)
+- `/opt/homebrew/bin/VBoxManage` (Homebrew on Apple Silicon)
+
+3. Test with launchd-like environment:
+```bash
+./test_launchd_env.sh
+```
+
+**Note:** Launchd doesn't inherit your shell PATH, so relative paths won't work. Always use absolute paths.
 
 ### Permission Errors
 
@@ -283,8 +380,7 @@ If you encounter permission errors:
 
 If you encounter an error like `VBOX_E_INVALID_OBJECT_STATE` or "Medium is locked for writing", the VM is likely running. The script handles this automatically based on the `handle_running_vms` configuration:
 
-- **Default behavior (`"pause"`)**: The script will automatically pause the VM, perform the backup, then resume it. This is the recommended setting as it preserves the VM's running state.
-- **`"suspend"`**: Saves the VM state and suspends it before backup. The VM will remain suspended after backup.
+- **`"suspend"`** (recommended): Saves the VM state and suspends it before backup, then automatically resumes it after backup completes
 - **`"skip"`**: Skips running VMs and logs a warning.
 - **`"fail"`**: Fails the backup if a VM is running.
 
